@@ -1,0 +1,11 @@
+{
+  "name": "cron-next",
+  "version": "0.1.0",
+  "description": "A five-field cron expression parser and next-fire-time calculator",
+  "type": "module",
+  "main": "src/cron.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}
