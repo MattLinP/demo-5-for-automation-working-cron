@@ -281,11 +281,35 @@ function isNameAnywhere(text) {
   return Object.keys(NAMES).some((field) => spelledNumber(text, field) !== undefined);
 }
 
-// Where each field starts, counted in the expression as it was passed rather than
-// re-derived by joining the split fields, so that runs of whitespace between fields do
-// not shift the offsets.
-function fieldOffsets(expression) {
-  return [...expression.matchAll(/\S+/g)].map((match) => match.index);
+// An expression into its fields: for each, the `text` it was written with and `at`,
+// where that text starts in the expression as it was passed.
+//
+// Offsets are counted in that string rather than re-derived by joining the fields back
+// together, so leading whitespace and runs of whitespace between fields are carried
+// rather than collapsed.
+//
+// Splitting is all this does. A token is a piece of text and a place; whether that text
+// spells a minute, and whether the minute it spells exists, is `parse`'s question.
+//
+// The five-field count is checked here, because a field is what is being counted and
+// this is the one place that decides where one field ends and the next begins.
+export function tokenize(expression) {
+  const tokens = [...expression.matchAll(/\S+/g)].map((match) => ({
+    text: match[0],
+    at: match.index,
+  }));
+
+  // An expression of nothing but whitespace has no runs to find, but it is not an
+  // expression of no fields: it is one field that happens to be empty, and it has always
+  // been counted as one.
+  const count = tokens.length === 0 ? 1 : tokens.length;
+  if (count !== 5) {
+    throw new CronError(`expected 5 fields, got ${count}`, {
+      suggestion: suggestionFor({ fieldCount: count }),
+    });
+  }
+
+  return tokens;
 }
 
 // A field error re-raised with the place in the expression it came from, and with the
@@ -296,45 +320,39 @@ function pointingAt(error, location) {
   return error instanceof CronError ? new CronError(error.message, location) : error;
 }
 
-// A cron expression into the five value sets it allows.
+// A cron expression into the five value sets it allows. Splitting the expression into
+// fields is `tokenize`'s job; this reads the tokens it hands back.
 export function parse(expression) {
   if (typeof expression !== 'string') throw new CronError('expression must be a string');
 
-  const parts = expression.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    throw new CronError(`expected 5 fields, got ${parts.length}`, {
-      suggestion: suggestionFor({ fieldCount: parts.length }),
-    });
-  }
+  const tokens = tokenize(expression);
 
   const schedule = {};
   for (let i = 0; i < FIELDS.length; i++) {
     const field = FIELDS[i];
+    const token = tokens[i];
     try {
       schedule[field.name] = expandField(
-        parts[i],
+        token.text,
         field.min,
         field.max,
         field.name,
         field.allowsLast,
       );
     } catch (error) {
-      // Offsets are wanted only to point at a failure, so they are found here rather
-      // than on every parse.
-      const offset = fieldOffsets(expression)[i];
       throw pointingAt(error, {
         expression,
-        offset,
-        length: parts[i].length,
-        suggestion: suggestionFor({ text: parts[i], name: field.name }),
+        offset: token.at,
+        length: token.text.length,
+        suggestion: suggestionFor({ text: token.text, name: field.name }),
       });
     }
   }
   // Which of the two day fields were restricted, which the expanded sets cannot say:
   // a field written out in full covers the same values as `*` but is still restricted,
   // and the difference decides how the two fields combine. See `matchesDay`.
-  schedule.dayOfMonthRestricted = parts[2] !== '*';
-  schedule.dayOfWeekRestricted = parts[4] !== '*';
+  schedule.dayOfMonthRestricted = tokens[2].text !== '*';
+  schedule.dayOfWeekRestricted = tokens[4].text !== '*';
   schedule.source = expression;
   return schedule;
 }

@@ -8,6 +8,7 @@ import {
   nextRun,
   nextRuns,
   parse,
+  tokenize,
 } from '../src/cron.js';
 
 test('a star expands to the whole range', () => {
@@ -172,6 +173,65 @@ test('a value outside the field is refused', () => {
 
 test('a field that is not a number is refused', () => {
   assert.throws(() => expandField('mon', 0, 59), CronError);
+});
+
+test('tokenize gives each field its text and where it starts', () => {
+  assert.deepEqual(tokenize('0 9 32 * *'), [
+    { text: '0', at: 0 },
+    { text: '9', at: 2 },
+    { text: '32', at: 4 },
+    { text: '*', at: 7 },
+    { text: '*', at: 9 },
+  ]);
+});
+
+test('offsets are into the expression as passed, irregular spacing and all', () => {
+  assert.deepEqual(tokenize('0  9 32 * *'), [
+    { text: '0', at: 0 },
+    { text: '9', at: 3 },
+    { text: '32', at: 5 },
+    { text: '*', at: 8 },
+    { text: '*', at: 10 },
+  ]);
+});
+
+test('leading whitespace moves every field along with it', () => {
+  assert.deepEqual(
+    tokenize('  0 9 * * *').map((token) => token.at),
+    [2, 4, 6, 8, 10],
+  );
+});
+
+test('a tab between fields counts as the one character it is', () => {
+  assert.deepEqual(
+    tokenize('0\t9\t32 * *').map((token) => token.at),
+    [0, 2, 4, 7, 9],
+  );
+});
+
+test('tokenize reads none of what it splits', () => {
+  assert.deepEqual(
+    tokenize('nonsense 99 - JANUARY zz').map((token) => token.text),
+    ['nonsense', '99', '-', 'JANUARY', 'zz'],
+  );
+});
+
+test('tokenize is where the five-field count is checked', () => {
+  assert.throws(() => tokenize('0 9 * *'), {
+    name: 'CronError',
+    message: 'expected 5 fields, got 4',
+  });
+  assert.throws(() => tokenize(''), {
+    name: 'CronError',
+    message: 'expected 5 fields, got 1',
+  });
+  assert.throws(() => tokenize('0 0 0 * * *'), {
+    name: 'CronError',
+    message: [
+      'expected 5 fields, got 6',
+      'likely cause: this parser takes five fields; a leading seconds field is a Quartz expression — see docs/adr/0001-five-fields-only.md',
+    ].join('\n'),
+  });
 });
 
 test('an expression needs exactly five fields', () => {
