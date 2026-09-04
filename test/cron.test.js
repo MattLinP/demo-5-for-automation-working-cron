@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CronError, expandField, nextRun, parse } from '../src/cron.js';
+import { CronError, LAST_DAY_OF_MONTH, expandField, nextRun, parse } from '../src/cron.js';
 
 test('a star expands to the whole range', () => {
   assert.deepEqual(expandField('*', 0, 3), [0, 1, 2, 3]);
@@ -273,4 +273,90 @@ test('a day field is restricted by being written out, not by what it covers', ()
   const schedule = parse('0 0 15 * 0,1,2,3,4,5,6');
   const next = nextRun(schedule, new Date('2026-03-01T00:00:00Z'));
   assert.equal(next.toISOString(), '2026-03-02T00:00:00.000Z');
+});
+
+test('L in the day of month expands to the last-day marker', () => {
+  assert.deepEqual(parse('0 0 L * *').dayOfMonth, [LAST_DAY_OF_MONTH]);
+});
+
+test('expandField expands L only when the field allows it', () => {
+  assert.deepEqual(expandField('L', 1, 31, 'dayOfMonth', true), [LAST_DAY_OF_MONTH]);
+  assert.throws(() => expandField('L', 1, 31, 'dayOfMonth'), {
+    name: 'CronError',
+    message: 'dayOfMonth: not a number: L (allowed 1-31)',
+  });
+});
+
+test('L is refused in every field but the day of month', () => {
+  assert.throws(() => parse('L * * * *'), CronError);
+  assert.throws(() => parse('* L * * *'), CronError);
+  assert.throws(() => parse('* * * L *'), CronError);
+  assert.throws(() => parse('* * * * L'), CronError);
+});
+
+test('L in another field names that field and points at it', () => {
+  assert.throws(() => parse('0 0 * * L'), {
+    name: 'CronError',
+    message: [
+      'dayOfWeek: not a number: L (allowed 0-6)',
+      '',
+      '  0 0 * * L',
+      '          ^',
+    ].join('\n'),
+  });
+});
+
+test('L is not a range end', () => {
+  assert.throws(() => parse('0 0 1-L * *'), CronError);
+  assert.throws(() => parse('0 0 L-5 * *'), CronError);
+});
+
+test('L fires on the last day of a 31 day month', () => {
+  const schedule = parse('0 0 L * *');
+  const next = nextRun(schedule, new Date('2026-01-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2026-01-31T00:00:00.000Z');
+});
+
+test('L fires on the last day of a short February', () => {
+  const schedule = parse('0 0 L * *');
+  const next = nextRun(schedule, new Date('2026-02-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2026-02-28T00:00:00.000Z');
+});
+
+test('L fires on the last day of a leap February', () => {
+  const schedule = parse('0 0 L * *');
+  const next = nextRun(schedule, new Date('2028-02-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2028-02-29T00:00:00.000Z');
+});
+
+test('L fires on the last day of a 30 day month', () => {
+  const schedule = parse('0 0 L * *');
+  const next = nextRun(schedule, new Date('2026-04-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2026-04-30T00:00:00.000Z');
+});
+
+test('L is resolved per month rather than once at parse time', () => {
+  const schedule = parse('0 0 L * *');
+  assert.equal(
+    nextRun(schedule, new Date('2026-01-31T00:01:00Z')).toISOString(),
+    '2026-02-28T00:00:00.000Z',
+  );
+  assert.equal(
+    nextRun(schedule, new Date('2026-02-28T00:01:00Z')).toISOString(),
+    '2026-03-31T00:00:00.000Z',
+  );
+});
+
+test('L composes in a list', () => {
+  const schedule = parse('0 0 1,L * *');
+  const first = nextRun(schedule, new Date('2026-04-01T00:01:00Z'));
+  assert.equal(first.toISOString(), '2026-04-30T00:00:00.000Z');
+  assert.equal(nextRun(schedule, first).toISOString(), '2026-05-01T00:00:00.000Z');
+});
+
+test('L is a restricted day of month, so it ORs with a restricted day of week', () => {
+  const schedule = parse('0 0 L * 1');
+  // 30 April 2026 is a Thursday, and the Monday before it is the 27th.
+  const next = nextRun(schedule, new Date('2026-04-28T00:00:00Z'));
+  assert.equal(next.toISOString(), '2026-04-30T00:00:00.000Z');
 });

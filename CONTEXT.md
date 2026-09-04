@@ -21,6 +21,10 @@ A **cron expression** is five whitespace-separated **fields**:
 - `n` — that single value.
 - `a-b` — a **range**, and it is **inclusive at both ends**. `1-5` is 1, 2, 3, 4 and 5.
 - `a,b,c` — a **list**, whose items may themselves be single values or ranges.
+- `L` — **the day-of-month field only**: the last day of whichever month is being
+  tested. 31 in January, 28 in February, 29 in a leap February, 30 in April. It is a
+  value and may be a list item — `1,L` is the first and last day of each month — but it
+  is not a number, so it cannot be an end of a range. In any other field it is an error.
 
 Values outside a field's range, ranges written backwards, and text that is not a number
 are all errors. An expression that is not a string, or does not have exactly five
@@ -47,6 +51,6 @@ always zero.
 
 ## Not implemented in 0.1
 
-Step syntax (`*/5`, `10-20/2`), named months and weekdays (`JAN`, `MON`), `L` for the
-last day of a month, and any timezone other than UTC. Expressions using them are
-refused with an error rather than silently misread.
+Step syntax (`*/5`, `10-20/2`), named months and weekdays (`JAN`, `MON`), and any
+timezone other than UTC. Expressions using them are refused with an error rather than
+silently misread.

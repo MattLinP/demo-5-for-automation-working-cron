@@ -32,5 +32,6 @@ way for callers to say which dialect they are writing. That is a different libra
 
 - `parse` refuses anything that is not exactly five fields, with the count it saw.
 - The special characters `?`, `W` and `#` are not implemented and will not be. `L` is a
-  separate question — it exists in the Unix dialect too — and is merely unbuilt.
+  separate question — it exists in the Unix dialect too — and is implemented, for the
+  day-of-month field only (`CONTEXT.md`).
 - Anyone needing Quartz should use a Quartz parser.
