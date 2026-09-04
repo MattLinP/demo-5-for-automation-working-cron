@@ -131,12 +131,12 @@ test('a step failure is not misreported as unsupported syntax', () => {
   });
 });
 
-test('a named weekday with a step is still read as a name', () => {
+test('a named weekday with a step fails over the step, not the name', () => {
+  // `MON` is a name the field reads, so there is nothing for a guess to add: what is
+  // wrong with `MON/2` is that a single value is nothing to step over.
   assert.throws(() => parse('0 0 * * MON/2'), (error) => {
-    assert.equal(
-      error.suggestion,
-      'named months and weekdays are not supported in this version; use the number',
-    );
+    assert.equal(error.suggestion, undefined);
+    assert.match(error.message, /step needs \* or a range: MON\/2/);
     return true;
   });
 });
@@ -225,8 +225,157 @@ test('a month-restricted schedule waits for that month', () => {
   assert.equal(next.getUTCDate(), 1);
 });
 
-test('named weekdays are not supported yet', () => {
-  assert.throws(() => parse('0 0 * * MON'), CronError);
+// `Mon`, the third of the three spellings every name is tested in, beside `MON` and `mon`.
+function titleCase(name) {
+  return name[0] + name.slice(1).toLowerCase();
+}
+
+test('every month name parses, in any case', () => {
+  const months = [
+    'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+    'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
+  ];
+  months.forEach((month, index) => {
+    for (const spelling of [month, month.toLowerCase(), titleCase(month)]) {
+      assert.deepEqual(parse(`0 0 1 ${spelling} *`).month, [index + 1], spelling);
+    }
+  });
+});
+
+test('every weekday name parses, in any case', () => {
+  const days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  days.forEach((day, index) => {
+    for (const spelling of [day, day.toLowerCase(), titleCase(day)]) {
+      assert.deepEqual(parse(`0 0 * * ${spelling}`).dayOfWeek, [index], spelling);
+    }
+  });
+});
+
+test('a name is a spelling of a number and nothing else', () => {
+  assert.deepEqual(parse('0 0 * * MON').dayOfWeek, parse('0 0 * * 1').dayOfWeek);
+  assert.deepEqual(parse('0 0 1 JAN *').month, parse('0 0 1 1 *').month);
+});
+
+test('MON-FRI is the working week', () => {
+  assert.deepEqual(parse('0 0 * * MON-FRI').dayOfWeek, [1, 2, 3, 4, 5]);
+});
+
+test('names are the ends of a range in the month field too', () => {
+  assert.deepEqual(parse('0 0 1 JAN-MAR *').month, [1, 2, 3]);
+  assert.deepEqual(parse('0 0 1 JAN-DEC *').month, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+});
+
+test('names are list items', () => {
+  assert.deepEqual(parse('0 0 1 JAN,JUL *').month, [1, 7]);
+  assert.deepEqual(parse('0 0 * * SAT,SUN').dayOfWeek, [0, 6]);
+});
+
+test('names are the bounds of a stepped range', () => {
+  assert.deepEqual(parse('0 0 * * MON-FRI/2').dayOfWeek, [1, 3, 5]);
+  assert.deepEqual(parse('0 0 1 JAN-DEC/3 *').month, [1, 4, 7, 10]);
+});
+
+test('a name and a number mix in one field', () => {
+  assert.deepEqual(parse('0 0 * * MON,3,FRI').dayOfWeek, [1, 3, 5]);
+  assert.deepEqual(parse('0 0 1 1-MAR *').month, [1, 2, 3]);
+});
+
+test('every Monday fires on a Monday', () => {
+  const schedule = parse('0 0 * * MON');
+  const next = nextRun(schedule, new Date('2026-03-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2026-03-02T00:00:00.000Z');
+});
+
+test('a named month fires in that month', () => {
+  const schedule = parse('0 0 1 JAN *');
+  const next = nextRun(schedule, new Date('2026-03-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2027-01-01T00:00:00.000Z');
+});
+
+test('a named weekday restricts its field the way a number does', () => {
+  assert.equal(parse('0 0 * * MON').dayOfWeekRestricted, true);
+  assert.equal(parse('0 0 * * MON').dayOfMonthRestricted, false);
+});
+
+test('names belong only to the fields that have them', () => {
+  assert.throws(() => parse('MON * * * *'), CronError);
+  assert.throws(() => parse('* JAN * * *'), CronError);
+  assert.throws(() => parse('0 0 MON * *'), CronError);
+  // A weekday name is not a month name, and a month name is not a weekday name.
+  assert.throws(() => parse('0 0 1 MON *'), CronError);
+  assert.throws(() => parse('0 0 * * JAN'), CronError);
+});
+
+test('a name in a field that has none names that field', () => {
+  assert.throws(() => parse('JAN * * * *'), {
+    name: 'CronError',
+    message: [
+      'minute: not a number: JAN (allowed 0-59)',
+      '',
+      '  JAN * * * *',
+      '  ^^^',
+      'likely cause: only the month and day-of-week fields have names; use the number',
+    ].join('\n'),
+  });
+});
+
+test('a name the field does not know is refused', () => {
+  assert.throws(() => parse('0 0 * * MONDAY'), {
+    name: 'CronError',
+    message: [
+      'dayOfWeek: not a number: MONDAY (allowed 0-6)',
+      '',
+      '  0 0 * * MONDAY',
+      '          ^^^^^^',
+      'likely cause: month and weekday names are the first three letters, as in JAN and MON',
+    ].join('\n'),
+  });
+});
+
+test('a name in the wrong naming field is told which field it belongs to', () => {
+  // Both fields have names, so neither guess about *having* names fits: what went wrong
+  // is that this name belongs to the other one.
+  assert.throws(() => parse('0 0 1 MON *'), {
+    name: 'CronError',
+    message: [
+      'month: not a number: MON (allowed 1-12)',
+      '',
+      '  0 0 1 MON *',
+      '        ^^^',
+      'likely cause: months are JAN–DEC and weekdays SUN–SAT; that name belongs to the other field',
+    ].join('\n'),
+  });
+  assert.throws(() => parse('0 0 * * JAN'), (error) => {
+    assert.equal(
+      error.suggestion,
+      'months are JAN–DEC and weekdays SUN–SAT; that name belongs to the other field',
+    );
+    return true;
+  });
+});
+
+test('a word that is a name nowhere is not blamed on the other field', () => {
+  assert.throws(() => parse('0 0 1 MONDAY *'), (error) => {
+    assert.equal(
+      error.suggestion,
+      'month and weekday names are the first three letters, as in JAN and MON',
+    );
+    return true;
+  });
+});
+
+test('a named range written backwards is refused', () => {
+  assert.throws(() => parse('0 0 * * FRI-MON'), CronError);
+  assert.throws(() => parse('0 0 1 DEC-JAN *'), CronError);
+});
+
+test('expandField expands names only for a field that has them', () => {
+  assert.deepEqual(expandField('MON-FRI', 0, 6, 'dayOfWeek'), [1, 2, 3, 4, 5]);
+  assert.deepEqual(expandField('JAN,JUL', 1, 12, 'month'), [1, 7]);
+  assert.throws(() => expandField('MON', 0, 59, 'minute'), {
+    name: 'CronError',
+    message: 'minute: not a number: MON (allowed 0-59)',
+  });
 });
 
 test('an out of range value names its field and points at it', () => {
@@ -266,14 +415,13 @@ test('an hour error names the hour field', () => {
 });
 
 test('a month error names the month field', () => {
-  assert.throws(() => parse('* * * JAN *'), {
+  assert.throws(() => parse('* * * 13 *'), {
     name: 'CronError',
     message: [
-      'month: not a number: JAN (allowed 1-12)',
+      'month: out of range: 13 (allowed 1-12)',
       '',
-      '  * * * JAN *',
-      '        ^^^',
-      'likely cause: named months and weekdays are not supported in this version; use the number',
+      '  * * * 13 *',
+      '        ^^',
     ].join('\n'),
   });
 });
@@ -365,15 +513,15 @@ test('errors with no field to point at are unchanged', () => {
   });
 });
 
-test('a named weekday gets a guess at what was meant', () => {
-  assert.throws(() => parse('0 0 * * MON'), {
+test('a name in a field with no names gets a guess at what was meant', () => {
+  assert.throws(() => parse('0 0 SAT * *'), {
     name: 'CronError',
     message: [
-      'dayOfWeek: not a number: MON (allowed 0-6)',
+      'dayOfMonth: not a number: SAT (allowed 1-31)',
       '',
-      '  0 0 * * MON',
-      '          ^^^',
-      'likely cause: named months and weekdays are not supported in this version; use the number',
+      '  0 0 SAT * *',
+      '      ^^^',
+      'likely cause: only the month and day-of-week fields have names; use the number',
     ].join('\n'),
   });
 });
@@ -402,10 +550,10 @@ test('7 in the day of week field gets a guess at what was meant', () => {
 });
 
 test('the suggestion is a property of the error as well', () => {
-  assert.throws(() => parse('0 0 * * MON'), (error) => {
+  assert.throws(() => parse('JAN * * * *'), (error) => {
     assert.equal(
       error.suggestion,
-      'named months and weekdays are not supported in this version; use the number',
+      'only the month and day-of-week fields have names; use the number',
     );
     return true;
   });

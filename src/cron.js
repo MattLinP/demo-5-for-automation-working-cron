@@ -20,6 +20,21 @@ const FIELDS = [
   { name: 'dayOfWeek', min: 0, max: 6 },
 ];
 
+// The names two of the fields accept, as the numbers they spell. A name is a spelling of
+// a number and nothing more: it is read in `toNumber`, the one place a field's text
+// becomes a number, so every position a number may take accepts a name for free — on its
+// own, at either end of a range, as a list item, and as the bounds of a stepped range.
+//
+// Keyed by field name, because names belong only to the fields that have them. A field
+// absent from this table has no names, and `JAN` in it is an error rather than 1.
+const NAMES = {
+  month: {
+    JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6,
+    JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12,
+  },
+  dayOfWeek: { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 },
+};
+
 // `L`, the last day of the month, as it stands in an expanded day-of-month field. It is
 // the one piece of syntax whose value is not known at parse time — 28, 29, 30 or 31
 // depending on the month being tested — so it travels through the expansion as itself
@@ -56,11 +71,13 @@ export class CronError extends Error {
 
 // The mistakes common enough to be worth guessing at, and what to say about each.
 //
-// `names` says "not supported in this version" rather than "not supported": it stays
-// true when that syntax lands, and only stops being reachable. `fieldCount` and
-// `sundayIsZero` describe decisions rather than gaps, so neither is waiting on anything.
+// Each of these describes a decision rather than a gap — names belong to two fields, five
+// fields is the shape this parser takes, Sunday is 0 — so none is waiting on anything and
+// none goes stale on its own.
 const SUGGESTIONS = {
-  names: 'named months and weekdays are not supported in this version; use the number',
+  noNamesHere: 'only the month and day-of-week fields have names; use the number',
+  wrongNameField: 'months are JAN–DEC and weekdays SUN–SAT; that name belongs to the other field',
+  unknownName: 'month and weekday names are the first three letters, as in JAN and MON',
   fieldCount:
     'this parser takes five fields; a leading seconds field is a Quartz expression — see docs/adr/0001-five-fields-only.md',
   sundayIsZero: 'days of the week are 0–6, where 0 is Sunday',
@@ -75,17 +92,31 @@ const SUGGESTIONS = {
 // two mistakes gets the one looked for first.
 //
 // A `/` is not one of the marks looked for: step syntax is supported, so a field
-// carrying one failed for some other reason — `*/0` is a step of zero, `MON/2` is a
-// name — and saying "step syntax is not supported" of either would be a wrong guess.
+// carrying one failed for some other reason — `*/0` is a step of zero, `5/15` steps over
+// a single value — and saying "step syntax is not supported" of either would be a wrong
+// guess.
 function suggestionFor({ fieldCount, text, name }) {
   // Too few fields is a typo and says nothing about what was meant. Too many is usually
   // a Quartz expression, which this parser refuses by decision rather than by omission.
   if (fieldCount !== undefined) return fieldCount > 5 ? SUGGESTIONS.fieldCount : undefined;
 
   // Month and weekday names are three letters, so a run of letters is someone reaching
-  // for `MON`. A lone letter is not: `L` is real syntax here, in the day-of-month field,
-  // and `L` in the wrong field or at the end of a range is not a misspelled name.
-  if (/[A-Za-z]{2,}/.test(text)) return SUGGESTIONS.names;
+  // for one. A run this field already reads is not the mistake — `MON/2` failed over its
+  // step, not its name — so only a run the field cannot read earns a guess. A lone letter
+  // is not a run: `L` is real syntax here, in the day-of-month field, and `L` in the
+  // wrong field or at the end of a range is not a misspelled name.
+  //
+  // Which guess an unreadable run earns is the difference between three mistakes: a name
+  // in a field that has none, a name in the naming field it does not belong to, and a
+  // word that is not a name anywhere.
+  const unreadable = (text.match(/[A-Za-z]{2,}/g) ?? []).filter(
+    (run) => spelledNumber(run, name) === undefined,
+  );
+  if (unreadable.length > 0) {
+    if (namesFor(name) === undefined) return SUGGESTIONS.noNamesHere;
+    if (unreadable.some(isNameAnywhere)) return SUGGESTIONS.wrongNameField;
+    return SUGGESTIONS.unknownName;
+  }
   // Sunday as 7 rather than 0 — a convention borrowed from another dialect rather than a
   // value picked at random, which is why only the bare 7 is read this way.
   if (name === 'dayOfWeek' && text === '7') return SUGGESTIONS.sundayIsZero;
@@ -127,7 +158,9 @@ function namedFor(message, name) {
 //
 // Understands `*`, a single number, an inclusive range `a-b`, a step over either of
 // those — `*/n` and `a-b/n` — and a comma-separated list of any of those. `name` is the
-// field's name, used to say where an error came from.
+// field's name, used to say where an error came from, and to decide which names the
+// field accepts: wherever a number may be written, a field with names takes one of its
+// own instead.
 //
 // A step counts from the lower bound of whatever it steps over: `*/n` from the field's
 // own minimum, `a-b/n` from `a`. So `5-20/5` is 5, 10, 15 and 20 rather than every fifth
@@ -209,11 +242,43 @@ function toStep(text, part, name) {
   return step;
 }
 
+// One value's text as the number it stands for, bounded by the field's range.
+//
+// A name is resolved to its number and then checked like any other, rather than trusted
+// past the check: past this point nothing can tell a name from the digits that spell the
+// same number. Errors quote the text as it was written, so `DEC` is reported as `DEC`.
 function toNumber(text, min, max, name) {
-  if (!/^[0-9]+$/.test(text)) throw fieldError(`not a number: ${text}`, min, max, name);
-  const value = Number(text);
+  const value = spelledNumber(text, name);
+  if (value === undefined) throw fieldError(`not a number: ${text}`, min, max, name);
   if (value < min || value > max) throw fieldError(`out of range: ${text}`, min, max, name);
   return value;
+}
+
+// The number a piece of a field's text spells, or `undefined` when it spells none.
+//
+// Digits spell the number they write out. In a field that has names, so does a name, in
+// any case — `mon`, `Mon` and `MON` are one name. Nothing else is a number, so `L` and
+// a name in a field without names both land here as `undefined`.
+function spelledNumber(text, name) {
+  if (/^[0-9]+$/.test(text)) return Number(text);
+  const names = namesFor(name);
+  const key = text.toUpperCase();
+  // `hasOwn`, so that `constructor` and `toString` are as unknown as any other word.
+  return names !== undefined && Object.hasOwn(names, key) ? names[key] : undefined;
+}
+
+// The names a field accepts, or `undefined` for a field that has none — which is every
+// field but month and day of week, and also the no-field case, where `expandField` was
+// called directly and there is no field whose names these would be.
+function namesFor(name) {
+  return Object.hasOwn(NAMES, name) ? NAMES[name] : undefined;
+}
+
+// Whether any field would read this text as a name, whichever field was asked. Used only
+// to tell "not a name here" from "not a name at all", so that `MON` in the month field is
+// answered as the mix-up it is rather than as an unrecognised word.
+function isNameAnywhere(text) {
+  return Object.keys(NAMES).some((field) => spelledNumber(text, field) !== undefined);
 }
 
 // Where each field starts, counted in the expression as it was passed rather than
