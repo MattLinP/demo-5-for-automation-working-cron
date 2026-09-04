@@ -22,11 +22,28 @@ test('a list expands to its members, sorted and deduplicated', () => {
   assert.deepEqual(expandField('5,1,3,1', 0, 59), [1, 3, 5]);
 });
 
-test('a range includes the values between its ends', () => {
-  const values = expandField('10-20', 0, 59);
-  assert.ok(values.includes(12));
-  assert.ok(values.includes(15));
-  assert.ok(!values.includes(9));
+test('a range expands to every value from its start to its end, inclusive', () => {
+  assert.deepEqual(expandField('1-5', 0, 59), [1, 2, 3, 4, 5]);
+  assert.deepEqual(
+    expandField('10-20', 0, 59),
+    [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+  );
+});
+
+test('a range at the top of a field keeps its last value', () => {
+  assert.deepEqual(expandField('55-59', 0, 59), [55, 56, 57, 58, 59]);
+  assert.deepEqual(expandField('0-6', 0, 6), [0, 1, 2, 3, 4, 5, 6]);
+});
+
+test('a range of one value expands to that value', () => {
+  assert.deepEqual(expandField('7-7', 0, 59), [7]);
+});
+
+test('a range inside a list keeps its last value', () => {
+  assert.deepEqual(expandField('1,3-5,9', 0, 59), [1, 3, 4, 5, 9]);
+  assert.deepEqual(expandField('16-31', 1, 31), [
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+  ]);
 });
 
 test('a range written backwards is refused', () => {
