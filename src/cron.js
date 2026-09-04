@@ -56,10 +56,9 @@ export class CronError extends Error {
 
 // The mistakes common enough to be worth guessing at, and what to say about each.
 //
-// The three about syntax say "not supported in this version" rather than "not
-// supported": they stay true when that syntax lands, and only stop being reachable.
+// The two about syntax say "not supported in this version" rather than "not supported":
+// they stay true when that syntax lands, and only stop being reachable.
 const SUGGESTIONS = {
-  step: 'step syntax is not supported in this version',
   names: 'named months and weekdays are not supported in this version; use the number',
   fieldCount:
     'this parser takes five fields; a leading seconds field is a Quartz expression — see docs/adr/0001-five-fields-only.md',
@@ -71,15 +70,17 @@ const SUGGESTIONS = {
 //
 // A failure is described either by `fieldCount`, for an expression that does not have
 // five fields, or by the `text` of the one field that would not expand together with
-// that field's `name`. A field can read as two mistakes at once — `MON/2` is both step
-// syntax and a name — so the first guess that matches wins, and the `/` is looked
-// for first as the more distinctive of the two marks.
+// that field's `name`. The first guess that matches wins, so a field that could read as
+// two mistakes gets the one looked for first.
+//
+// A `/` is not one of the marks looked for: step syntax is supported, so a field
+// carrying one failed for some other reason — `*/0` is a step of zero, `MON/2` is a
+// name — and saying "step syntax is not supported" of either would be a wrong guess.
 function suggestionFor({ fieldCount, text, name }) {
   // Too few fields is a typo and says nothing about what was meant. Too many is usually
   // a Quartz expression, which this parser refuses by decision rather than by omission.
   if (fieldCount !== undefined) return fieldCount > 5 ? SUGGESTIONS.fieldCount : undefined;
 
-  if (text.includes('/')) return SUGGESTIONS.step;
   // Month and weekday names are three letters, so a run of letters is someone reaching
   // for `MON`. A lone letter is not: `L` is real syntax here, in the day-of-month field,
   // and `L` in the wrong field or at the end of a range is not a misspelled name.
@@ -113,9 +114,13 @@ function fieldError(message, min, max, name) {
 
 // One field into the sorted set of values it allows.
 //
-// Understands `*`, a single number, an inclusive range `a-b`, and a comma-separated
-// list of any of those. `name` is the field's name, used to say where an error came
-// from.
+// Understands `*`, a single number, an inclusive range `a-b`, a step over either of
+// those — `*/n` and `a-b/n` — and a comma-separated list of any of those. `name` is the
+// field's name, used to say where an error came from.
+//
+// A step counts from the lower bound of whatever it steps over: `*/n` from the field's
+// own minimum, `a-b/n` from `a`. So `5-20/5` is 5, 10, 15 and 20 rather than every fifth
+// minute of the hour that happens to land inside 5-20.
 //
 // When `allowsLast` is set — only the day-of-month field sets it — a list item may also
 // be `L`, which expands to `LAST_DAY_OF_MONTH` rather than to a number. It is a value in
@@ -136,16 +141,37 @@ export function expandField(text, min, max, name, allowsLast = false) {
       continue;
     }
 
-    const dash = part.indexOf('-');
-    if (dash === -1) {
-      values.add(toNumber(part, min, max, name));
-      continue;
+    // A step is written after the values it counts over, so the item splits at the `/`
+    // into what to step over and how far to step. An item with no `/` steps by one,
+    // which walks every value and leaves a plain number or range as it was.
+    const slash = part.indexOf('/');
+    const stepped = slash !== -1;
+    const over = stepped ? part.slice(0, slash) : part;
+    const step = stepped ? toStep(part.slice(slash + 1), part, min, max, name) : 1;
+
+    const dash = over.indexOf('-');
+    let lo;
+    let hi;
+    if (stepped && over === '*') {
+      // `*/n` steps over the whole field. Bare `*` is not a list item, so the star is
+      // read this way only when there is a step for it to carry.
+      lo = min;
+      hi = max;
+    } else if (dash === -1) {
+      // A single value is a range of one, and a range of one is nothing for a step to
+      // count over: `5/15` is a mistake rather than a roundabout way of writing `5`.
+      if (stepped) throw fieldError(`step needs * or a range: ${part}`, min, max, name);
+      lo = toNumber(over, min, max, name);
+      hi = lo;
+    } else {
+      lo = toNumber(over.slice(0, dash), min, max, name);
+      hi = toNumber(over.slice(dash + 1), min, max, name);
+      if (lo > hi) throw fieldError(`range out of order: ${part}`, min, max, name);
     }
 
-    const lo = toNumber(part.slice(0, dash), min, max, name);
-    const hi = toNumber(part.slice(dash + 1), min, max, name);
-    if (lo > hi) throw fieldError(`range out of order: ${part}`, min, max, name);
-    for (let v = lo; v <= hi; v++) values.add(v);
+    // The first value is always in, so a step wider than what it counts over gives that
+    // value alone rather than nothing.
+    for (let v = lo; v <= hi; v += step) values.add(v);
   }
 
   return [...values].sort(ascending);
@@ -157,6 +183,19 @@ function ascending(a, b) {
   if (a === LAST_DAY_OF_MONTH) return 1;
   if (b === LAST_DAY_OF_MONTH) return -1;
   return a - b;
+}
+
+// The `n` of a step: how far to advance, not a value the field takes, so the field's own
+// range does not bound it — `*/90` in the minute field is legal and means minute 0 alone.
+// Zero is refused, since a step of nothing would never leave the first value.
+//
+// Errors quote the whole list item rather than the step alone: `*/n` is what was written,
+// and `not a number: n` on its own leaves the reader looking for an `n` in the field.
+function toStep(text, part, min, max, name) {
+  if (!/^[0-9]+$/.test(text)) throw fieldError(`not a number: ${part}`, min, max, name);
+  const step = Number(text);
+  if (step === 0) throw fieldError(`step of zero: ${part}`, min, max, name);
+  return step;
 }
 
 function toNumber(text, min, max, name) {

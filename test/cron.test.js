@@ -46,6 +46,120 @@ test('a range inside a list keeps its last value', () => {
   ]);
 });
 
+test('a step over the whole field counts from the start of the field', () => {
+  assert.deepEqual(expandField('*/15', 0, 59), [0, 15, 30, 45]);
+  assert.deepEqual(expandField('*/2', 0, 6), [0, 2, 4, 6]);
+});
+
+test('a step over a range counts from the lower bound of that range', () => {
+  assert.deepEqual(expandField('5-20/5', 0, 59), [5, 10, 15, 20]);
+  assert.deepEqual(expandField('10-20/2', 0, 59), [10, 12, 14, 16, 18, 20]);
+});
+
+test('a step of one is every value in the range', () => {
+  assert.deepEqual(expandField('5-8/1', 0, 59), [5, 6, 7, 8]);
+});
+
+test('a step larger than the range is its first value alone', () => {
+  assert.deepEqual(expandField('5-20/50', 0, 59), [5]);
+  assert.deepEqual(expandField('*/99', 0, 59), [0]);
+});
+
+test('a step that overshoots the end stops at the last value it reaches', () => {
+  assert.deepEqual(expandField('*/7', 0, 20), [0, 7, 14]);
+  assert.deepEqual(expandField('1-10/4', 0, 59), [1, 5, 9]);
+});
+
+test('steps compose inside a list', () => {
+  assert.deepEqual(expandField('0-10/5,30', 0, 59), [0, 5, 10, 30]);
+  assert.deepEqual(expandField('1,10-20/5,*/30', 0, 59), [0, 1, 10, 15, 20, 30]);
+});
+
+test('a step of zero is refused', () => {
+  assert.throws(() => expandField('*/0', 0, 59), CronError);
+  assert.throws(() => expandField('5-20/0', 0, 59), CronError);
+});
+
+test('a step that is not a number is refused', () => {
+  assert.throws(() => expandField('*/n', 0, 59), CronError);
+  assert.throws(() => expandField('*/', 0, 59), CronError);
+});
+
+test('a step needs a star or a range to count over', () => {
+  assert.throws(() => expandField('5/15', 0, 59), CronError);
+});
+
+test('a step over a backwards range is still refused', () => {
+  assert.throws(() => expandField('20-10/2', 0, 59), CronError);
+});
+
+test('a stepped range still keeps inside the bounds of the field', () => {
+  assert.throws(() => expandField('50-70/5', 0, 59), CronError);
+});
+
+test('L is not something to step over', () => {
+  assert.throws(() => parse('0 0 L/2 * *'), CronError);
+});
+
+test('step syntax parses in every one of the five fields', () => {
+  const schedule = parse('*/15 */6 */10 */3 */2');
+  assert.deepEqual(schedule.minute, [0, 15, 30, 45]);
+  assert.deepEqual(schedule.hour, [0, 6, 12, 18]);
+  assert.deepEqual(schedule.dayOfMonth, [1, 11, 21, 31]);
+  assert.deepEqual(schedule.month, [1, 4, 7, 10]);
+  assert.deepEqual(schedule.dayOfWeek, [0, 2, 4, 6]);
+});
+
+test('a step of zero names its field and points at it', () => {
+  assert.throws(() => parse('*/0 * * * *'), {
+    name: 'CronError',
+    message: [
+      'minute: step of zero: */0 (allowed 0-59)',
+      '',
+      '  */0 * * * *',
+      '  ^^^',
+    ].join('\n'),
+  });
+});
+
+test('a step failure is not misreported as unsupported syntax', () => {
+  assert.throws(() => parse('*/0 * * * *'), (error) => {
+    assert.equal(error.suggestion, undefined);
+    return true;
+  });
+});
+
+test('a named weekday with a step is still read as a name', () => {
+  assert.throws(() => parse('0 0 * * MON/2'), (error) => {
+    assert.equal(
+      error.suggestion,
+      'named months and weekdays are not supported in this version; use the number',
+    );
+    return true;
+  });
+});
+
+test('every fifth minute fires at every fifth minute', () => {
+  const schedule = parse('*/5 * * * *');
+  assert.deepEqual(
+    nextRuns(schedule, new Date('2026-03-01T00:00:00Z'), 3).map((run) => run.toISOString()),
+    ['2026-03-01T00:05:00.000Z', '2026-03-01T00:10:00.000Z', '2026-03-01T00:15:00.000Z'],
+  );
+});
+
+test('a stepped range fires only inside its range', () => {
+  const schedule = parse('0 9-17/4 * * *');
+  assert.deepEqual(
+    nextRuns(schedule, new Date('2026-03-01T00:00:00Z'), 4).map((run) => run.toISOString()),
+    [
+      '2026-03-01T09:00:00.000Z',
+      '2026-03-01T13:00:00.000Z',
+      '2026-03-01T17:00:00.000Z',
+      '2026-03-02T09:00:00.000Z',
+    ],
+  );
+});
+
 test('a range written backwards is refused', () => {
   assert.throws(() => expandField('20-10', 0, 59), CronError);
 });
@@ -107,10 +221,6 @@ test('a month-restricted schedule waits for that month', () => {
   const next = nextRun(schedule, new Date('2026-03-01T00:00:00Z'));
   assert.equal(next.getUTCMonth() + 1, 7);
   assert.equal(next.getUTCDate(), 1);
-});
-
-test('step syntax is not supported yet', () => {
-  assert.throws(() => parse('*/5 * * * *'), CronError);
 });
 
 test('named weekdays are not supported yet', () => {
@@ -253,19 +363,6 @@ test('errors with no field to point at are unchanged', () => {
   });
 });
 
-test('step syntax gets a guess at what was meant', () => {
-  assert.throws(() => parse('*/5 * * * *'), {
-    name: 'CronError',
-    message: [
-      'minute: not a number: */5 (allowed 0-59)',
-      '',
-      '  */5 * * * *',
-      '  ^^^',
-      'likely cause: step syntax is not supported in this version',
-    ].join('\n'),
-  });
-});
-
 test('a named weekday gets a guess at what was meant', () => {
   assert.throws(() => parse('0 0 * * MON'), {
     name: 'CronError',
@@ -303,8 +400,11 @@ test('7 in the day of week field gets a guess at what was meant', () => {
 });
 
 test('the suggestion is a property of the error as well', () => {
-  assert.throws(() => parse('*/5 * * * *'), (error) => {
-    assert.equal(error.suggestion, 'step syntax is not supported in this version');
+  assert.throws(() => parse('0 0 * * MON'), (error) => {
+    assert.equal(
+      error.suggestion,
+      'named months and weekdays are not supported in this version; use the number',
+    );
     return true;
   });
 });
