@@ -161,6 +161,7 @@ test('a month error names the month field', () => {
       '',
       '  * * * JAN *',
       '        ^^^',
+      'likely cause: named months and weekdays are not supported in this version; use the number',
     ].join('\n'),
   });
 });
@@ -249,6 +250,87 @@ test('errors with no field to point at are unchanged', () => {
   assert.throws(() => parse(''), {
     name: 'CronError',
     message: 'expected 5 fields, got 1',
+  });
+});
+
+test('step syntax gets a guess at what was meant', () => {
+  assert.throws(() => parse('*/5 * * * *'), {
+    name: 'CronError',
+    message: [
+      'minute: not a number: */5 (allowed 0-59)',
+      '',
+      '  */5 * * * *',
+      '  ^^^',
+      'likely cause: step syntax is not supported in this version',
+    ].join('\n'),
+  });
+});
+
+test('a named weekday gets a guess at what was meant', () => {
+  assert.throws(() => parse('0 0 * * MON'), {
+    name: 'CronError',
+    message: [
+      'dayOfWeek: not a number: MON (allowed 0-6)',
+      '',
+      '  0 0 * * MON',
+      '          ^^^',
+      'likely cause: named months and weekdays are not supported in this version; use the number',
+    ].join('\n'),
+  });
+});
+
+test('more than five fields gets a guess at what was meant', () => {
+  assert.throws(() => parse('0 0 0 * * *'), {
+    name: 'CronError',
+    message: [
+      'expected 5 fields, got 6',
+      'likely cause: this parser takes five fields; a leading seconds field is a Quartz expression — see docs/adr/0001-five-fields-only.md',
+    ].join('\n'),
+  });
+});
+
+test('7 in the day of week field gets a guess at what was meant', () => {
+  assert.throws(() => parse('0 0 * * 7'), {
+    name: 'CronError',
+    message: [
+      'dayOfWeek: out of range: 7 (allowed 0-6)',
+      '',
+      '  0 0 * * 7',
+      '          ^',
+      'likely cause: days of the week are 0–6, where 0 is Sunday',
+    ].join('\n'),
+  });
+});
+
+test('the suggestion is a property of the error as well', () => {
+  assert.throws(() => parse('*/5 * * * *'), (error) => {
+    assert.equal(error.suggestion, 'step syntax is not supported in this version');
+    return true;
+  });
+});
+
+test('a failure none of the guesses recognise gets no suggestion', () => {
+  assert.throws(() => parse('60 * * * *'), (error) => {
+    assert.equal(error.suggestion, undefined);
+    assert.equal(
+      error.message,
+      ['minute: out of range: 60 (allowed 0-59)', '', '  60 * * * *', '  ^^'].join('\n'),
+    );
+    return true;
+  });
+});
+
+test('L is not read as a name it does not resemble', () => {
+  // `L` is real syntax here, in the day-of-month field, so a field that is only `L`
+  // failing elsewhere is not someone reaching for `MON`. Month and weekday names are
+  // three letters, which is what the guess looks for.
+  assert.throws(() => parse('0 0 * * L'), (error) => {
+    assert.equal(error.suggestion, undefined);
+    return true;
+  });
+  assert.throws(() => parse('0 0 1-L * *'), (error) => {
+    assert.equal(error.suggestion, undefined);
+    return true;
   });
 });
 

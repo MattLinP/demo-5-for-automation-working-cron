@@ -33,17 +33,61 @@ export class CronError extends Error {
   // the error so a caller can render them their own way instead. Errors with no field
   // to point at are built without them and read as they always have. `options` is
   // otherwise the standard one `Error` takes, so `cause` still reaches it.
+  //
+  // `suggestion` is a guess at what the writer meant, from `suggestionFor`. It goes on
+  // the error as well, and on its own line at the end of the message — after the caret
+  // block, so the message opens with what is certainly wrong and closes with what is
+  // only likely. A failure no guess recognises carries none and reads as it always has.
   constructor(message, options) {
-    const { expression, offset, length } = options ?? {};
+    const { expression, offset, length, suggestion } = options ?? {};
     const located = typeof expression === 'string';
-    super(located ? `${message}\n\n${excerpt(expression, offset, length)}` : message, options);
+    const lines = [located ? `${message}\n\n${excerpt(expression, offset, length)}` : message];
+    if (suggestion !== undefined) lines.push(`likely cause: ${suggestion}`);
+    super(lines.join('\n'), options);
     this.name = 'CronError';
     if (located) {
       this.expression = expression;
       this.offset = offset;
       this.length = length;
     }
+    if (suggestion !== undefined) this.suggestion = suggestion;
   }
+}
+
+// The mistakes common enough to be worth guessing at, and what to say about each.
+//
+// The three about syntax say "not supported in this version" rather than "not
+// supported": they stay true when that syntax lands, and only stop being reachable.
+const SUGGESTIONS = {
+  step: 'step syntax is not supported in this version',
+  names: 'named months and weekdays are not supported in this version; use the number',
+  fieldCount:
+    'this parser takes five fields; a leading seconds field is a Quartz expression — see docs/adr/0001-five-fields-only.md',
+  sundayIsZero: 'days of the week are 0–6, where 0 is Sunday',
+};
+
+// A guess at what a failure meant, or `undefined` when it is none of the mistakes above
+// — which is the answer for most failures, and a better one than a wrong guess.
+//
+// A failure is described either by `fieldCount`, for an expression that does not have
+// five fields, or by the `text` of the one field that would not expand together with
+// that field's `name`. A field can read as two mistakes at once — `MON/2` is both step
+// syntax and a name — so the first guess that matches wins, and the `/` is looked
+// for first as the more distinctive of the two marks.
+function suggestionFor({ fieldCount, text, name }) {
+  // Too few fields is a typo and says nothing about what was meant. Too many is usually
+  // a Quartz expression, which this parser refuses by decision rather than by omission.
+  if (fieldCount !== undefined) return fieldCount > 5 ? SUGGESTIONS.fieldCount : undefined;
+
+  if (text.includes('/')) return SUGGESTIONS.step;
+  // Month and weekday names are three letters, so a run of letters is someone reaching
+  // for `MON`. A lone letter is not: `L` is real syntax here, in the day-of-month field,
+  // and `L` in the wrong field or at the end of a range is not a misspelled name.
+  if (/[A-Za-z]{2,}/.test(text)) return SUGGESTIONS.names;
+  // Sunday as 7 rather than 0 — a convention borrowed from another dialect rather than a
+  // value picked at random, which is why only the bare 7 is read this way.
+  if (name === 'dayOfWeek' && text === '7') return SUGGESTIONS.sundayIsZero;
+  return undefined;
 }
 
 // The two lines a compiler prints under a message: the expression itself, and carets
@@ -129,8 +173,10 @@ function fieldOffsets(expression) {
   return [...expression.matchAll(/\S+/g)].map((match) => match.index);
 }
 
-// A field error re-raised with the place in the expression it came from. Anything that
-// is not a CronError is left alone.
+// A field error re-raised with the place in the expression it came from, and with the
+// guess at what was meant if there is one: a field error becomes a located one exactly
+// once, so the message is composed once and in one order. Anything that is not a
+// CronError is left alone.
 function pointingAt(error, location) {
   return error instanceof CronError ? new CronError(error.message, location) : error;
 }
@@ -140,7 +186,11 @@ export function parse(expression) {
   if (typeof expression !== 'string') throw new CronError('expression must be a string');
 
   const parts = expression.trim().split(/\s+/);
-  if (parts.length !== 5) throw new CronError(`expected 5 fields, got ${parts.length}`);
+  if (parts.length !== 5) {
+    throw new CronError(`expected 5 fields, got ${parts.length}`, {
+      suggestion: suggestionFor({ fieldCount: parts.length }),
+    });
+  }
 
   const schedule = {};
   for (let i = 0; i < FIELDS.length; i++) {
@@ -157,7 +207,12 @@ export function parse(expression) {
       // Offsets are wanted only to point at a failure, so they are found here rather
       // than on every parse.
       const offset = fieldOffsets(expression)[i];
-      throw pointingAt(error, { expression, offset, length: parts[i].length });
+      throw pointingAt(error, {
+        expression,
+        offset,
+        length: parts[i].length,
+        suggestion: suggestionFor({ text: parts[i], name: field.name }),
+      });
     }
   }
   // Which of the two day fields were restricted, which the expanded sets cannot say:
