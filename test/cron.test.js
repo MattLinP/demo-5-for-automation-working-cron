@@ -227,3 +227,50 @@ test('errors with no field to point at are unchanged', () => {
     message: 'expected 5 fields, got 1',
   });
 });
+
+test('both day fields restricted fires on either, not only their overlap', () => {
+  const schedule = parse('0 0 1 * 1');
+  const next = nextRun(schedule, new Date('2026-03-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2026-03-02T00:00:00.000Z');
+});
+
+test('both day fields restricted fires on a Monday that is not the first', () => {
+  const schedule = parse('0 0 1 * 1');
+  const next = nextRun(schedule, new Date('2026-03-02T00:01:00Z'));
+  assert.equal(next.toISOString(), '2026-03-09T00:00:00.000Z');
+});
+
+test('both day fields restricted fires on a first that is not a Monday', () => {
+  const schedule = parse('0 0 1 * 1');
+  const next = nextRun(schedule, new Date('2026-03-30T00:01:00Z'));
+  assert.equal(next.toISOString(), '2026-04-01T00:00:00.000Z');
+});
+
+test('a restricted day of month alone still decides on its own', () => {
+  const schedule = parse('0 0 15 * *');
+  const next = nextRun(schedule, new Date('2026-03-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2026-03-15T00:00:00.000Z');
+});
+
+test('a restricted day of week alone still decides on its own', () => {
+  const schedule = parse('0 0 * * 1');
+  const next = nextRun(schedule, new Date('2026-03-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2026-03-02T00:00:00.000Z');
+});
+
+test('parse records which day fields were restricted', () => {
+  assert.equal(parse('0 0 1 * 1').dayOfMonthRestricted, true);
+  assert.equal(parse('0 0 1 * 1').dayOfWeekRestricted, true);
+  assert.equal(parse('0 0 * * *').dayOfMonthRestricted, false);
+  assert.equal(parse('0 0 * * *').dayOfWeekRestricted, false);
+  assert.equal(parse('0 0 1 * *').dayOfMonthRestricted, true);
+  assert.equal(parse('0 0 1 * *').dayOfWeekRestricted, false);
+});
+
+test('a day field is restricted by being written out, not by what it covers', () => {
+  // `0,1,2,3,4,5,6` allows every weekday, but it is not `*`, so the OR applies and
+  // the day-of-month field stops narrowing anything.
+  const schedule = parse('0 0 15 * 0,1,2,3,4,5,6');
+  const next = nextRun(schedule, new Date('2026-03-01T00:00:00Z'));
+  assert.equal(next.toISOString(), '2026-03-02T00:00:00.000Z');
+});
