@@ -101,7 +101,7 @@ export function expandField(text, min, max, name, allowsLast = false) {
     const lo = toNumber(part.slice(0, dash), min, max, name);
     const hi = toNumber(part.slice(dash + 1), min, max, name);
     if (lo > hi) throw fieldError(`range out of order: ${part}`, min, max, name);
-    for (let v = lo; v < hi; v++) values.add(v);
+    for (let v = lo; v <= hi; v++) values.add(v);
   }
 
   return [...values].sort(ascending);
