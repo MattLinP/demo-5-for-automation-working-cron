@@ -27,11 +27,22 @@ export class CronError extends Error {
   }
 }
 
+// A CronError from inside a field's expansion, named for the field it came from and
+// carrying the range that field allows.
+//
+// `name` is absent when `expandField` is called directly rather than through `parse`:
+// there is no field being read, so there is nothing to name.
+function fieldError(message, min, max, name) {
+  const field = name === undefined ? '' : `${name}: `;
+  return new CronError(`${field}${message} (allowed ${min}-${max})`);
+}
+
 // One field into the sorted set of values it allows.
 //
 // Understands `*`, a single number, an inclusive range `a-b`, and a comma-separated
-// list of any of those.
-export function expandField(text, min, max) {
+// list of any of those. `name` is the field's name, used to say where an error came
+// from.
+export function expandField(text, min, max, name) {
   if (text === '*') {
     const all = [];
     for (let v = min; v <= max; v++) all.push(v);
@@ -40,27 +51,27 @@ export function expandField(text, min, max) {
 
   const values = new Set();
   for (const part of text.split(',')) {
-    if (part === '') throw new CronError('empty list item');
+    if (part === '') throw fieldError('empty list item', min, max, name);
 
     const dash = part.indexOf('-');
     if (dash === -1) {
-      values.add(toNumber(part, min, max));
+      values.add(toNumber(part, min, max, name));
       continue;
     }
 
-    const lo = toNumber(part.slice(0, dash), min, max);
-    const hi = toNumber(part.slice(dash + 1), min, max);
-    if (lo > hi) throw new CronError(`range out of order: ${part}`);
+    const lo = toNumber(part.slice(0, dash), min, max, name);
+    const hi = toNumber(part.slice(dash + 1), min, max, name);
+    if (lo > hi) throw fieldError(`range out of order: ${part}`, min, max, name);
     for (let v = lo; v < hi; v++) values.add(v);
   }
 
   return [...values].sort((a, b) => a - b);
 }
 
-function toNumber(text, min, max) {
-  if (!/^[0-9]+$/.test(text)) throw new CronError(`not a number: ${text}`);
+function toNumber(text, min, max, name) {
+  if (!/^[0-9]+$/.test(text)) throw fieldError(`not a number: ${text}`, min, max, name);
   const value = Number(text);
-  if (value < min || value > max) throw new CronError(`out of range: ${text}`);
+  if (value < min || value > max) throw fieldError(`out of range: ${text}`, min, max, name);
   return value;
 }
 
@@ -74,7 +85,7 @@ export function parse(expression) {
   const schedule = {};
   for (let i = 0; i < FIELDS.length; i++) {
     const field = FIELDS[i];
-    schedule[field.name] = expandField(parts[i], field.min, field.max);
+    schedule[field.name] = expandField(parts[i], field.min, field.max, field.name);
   }
   schedule.source = expression;
   return schedule;

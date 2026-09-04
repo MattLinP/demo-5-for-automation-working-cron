@@ -92,3 +92,56 @@ test('step syntax is not supported yet', () => {
 test('named weekdays are not supported yet', () => {
   assert.throws(() => parse('0 0 * * MON'), CronError);
 });
+
+test('an out of range value names its field and states the range', () => {
+  assert.throws(() => parse('0 9 32 * *'), {
+    name: 'CronError',
+    message: 'dayOfMonth: out of range: 32 (allowed 1-31)',
+  });
+});
+
+test('a minute error names the minute field', () => {
+  assert.throws(() => parse('60 * * * *'), {
+    name: 'CronError',
+    message: 'minute: out of range: 60 (allowed 0-59)',
+  });
+});
+
+test('an hour error names the hour field', () => {
+  assert.throws(() => parse('* 9-2 * * *'), {
+    name: 'CronError',
+    message: 'hour: range out of order: 9-2 (allowed 0-23)',
+  });
+});
+
+test('a month error names the month field', () => {
+  assert.throws(() => parse('* * * JAN *'), {
+    name: 'CronError',
+    message: 'month: not a number: JAN (allowed 1-12)',
+  });
+});
+
+test('a day of week error names the day of week field', () => {
+  assert.throws(() => parse('* * * * 1,'), {
+    name: 'CronError',
+    message: 'dayOfWeek: empty list item (allowed 0-6)',
+  });
+});
+
+test('expandField called without a field name still states the range', () => {
+  assert.throws(() => expandField('99', 0, 59), {
+    name: 'CronError',
+    message: 'out of range: 99 (allowed 0-59)',
+  });
+});
+
+test('errors raised before any field is read are unchanged', () => {
+  assert.throws(() => parse('0 9 * *'), {
+    name: 'CronError',
+    message: 'expected 5 fields, got 4',
+  });
+  assert.throws(() => parse(null), {
+    name: 'CronError',
+    message: 'expression must be a string',
+  });
+});
