@@ -226,3 +226,33 @@ export function nextRun(schedule, from) {
 
   return null;
 }
+
+// The next `count` moments the schedule allows, starting after `from` and in ascending
+// order.
+//
+// Each answer becomes the next question, which is what makes the moments distinct:
+// `nextRun` starts from the minute *after* the moment it is given, so handing it back
+// its own answer asks for the run after that one. Writing this loop at a call site is
+// where the off-by-one lives — a caller who adds a second first, or subtracts one, is a
+// whole run out at a boundary — so it lives here instead, and `nextRun` stays the one
+// place that decides whether a moment matches.
+//
+// The list is short rather than padded when the schedule runs out: `nextRun` answers
+// `null` past the horizon it searches, and that ends the list. Each hop searches that
+// horizon afresh from where the previous one landed, so a long list may reach further
+// ahead than a single `nextRun` from `from` would.
+export function nextRuns(schedule, from, count) {
+  if (!Number.isInteger(count) || count < 0) {
+    throw new CronError(`count must be a non-negative integer, got ${count}`);
+  }
+
+  const runs = [];
+  let at = from;
+  for (let i = 0; i < count; i++) {
+    const next = nextRun(schedule, at);
+    if (next === null) break;
+    runs.push(next);
+    at = next;
+  }
+  return runs;
+}

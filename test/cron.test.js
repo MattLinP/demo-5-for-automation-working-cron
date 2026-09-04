@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CronError, LAST_DAY_OF_MONTH, expandField, nextRun, parse } from '../src/cron.js';
+import {
+  CronError,
+  LAST_DAY_OF_MONTH,
+  expandField,
+  nextRun,
+  nextRuns,
+  parse,
+} from '../src/cron.js';
 
 test('a star expands to the whole range', () => {
   assert.deepEqual(expandField('*', 0, 3), [0, 1, 2, 3]);
@@ -359,4 +366,52 @@ test('L is a restricted day of month, so it ORs with a restricted day of week', 
   // 30 April 2026 is a Thursday, and the Monday before it is the 27th.
   const next = nextRun(schedule, new Date('2026-04-28T00:00:00Z'));
   assert.equal(next.toISOString(), '2026-04-30T00:00:00.000Z');
+});
+
+test('nextRuns returns a schedule that fires several times a day in order', () => {
+  const schedule = parse('0 9,17 * * *');
+  const runs = nextRuns(schedule, new Date('2026-03-01T00:00:00Z'), 5);
+  assert.deepEqual(
+    runs.map((run) => run.toISOString()),
+    [
+      '2026-03-01T09:00:00.000Z',
+      '2026-03-01T17:00:00.000Z',
+      '2026-03-02T09:00:00.000Z',
+      '2026-03-02T17:00:00.000Z',
+      '2026-03-03T09:00:00.000Z',
+    ],
+  );
+});
+
+test('each run is strictly later than the one before it', () => {
+  const runs = nextRuns(parse('0 9,17 * * *'), new Date('2026-03-01T09:00:00Z'), 4);
+  for (let i = 1; i < runs.length; i++) {
+    assert.ok(runs[i] > runs[i - 1], `${runs[i].toISOString()} follows ${runs[i - 1].toISOString()}`);
+  }
+});
+
+test('nextRuns walks a monthly schedule a month at a time', () => {
+  const schedule = parse('0 0 1 * *');
+  const runs = nextRuns(schedule, new Date('2026-03-15T00:00:00Z'), 3);
+  assert.deepEqual(
+    runs.map((run) => run.toISOString()),
+    ['2026-04-01T00:00:00.000Z', '2026-05-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z'],
+  );
+});
+
+test('a schedule that never fires again gives a short array rather than nulls', () => {
+  // The 30th of February: every field is legal, and no date satisfies them together.
+  const runs = nextRuns(parse('0 0 30 2 *'), new Date('2026-03-01T00:00:00Z'), 3);
+  assert.deepEqual(runs, []);
+});
+
+test('a count of zero returns no runs', () => {
+  assert.deepEqual(nextRuns(parse('0 9 * * *'), new Date('2026-03-01T00:00:00Z'), 0), []);
+});
+
+test('a negative count is refused', () => {
+  assert.throws(
+    () => nextRuns(parse('0 9 * * *'), new Date('2026-03-01T00:00:00Z'), -1),
+    CronError,
+  );
 });
