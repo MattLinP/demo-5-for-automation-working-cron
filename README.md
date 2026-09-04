@@ -23,6 +23,6 @@ npm test
 
 ## Status
 
-0.1. Ranges, lists, `*` and `L` are supported. Step syntax, named months and weekdays,
-and timezones other than UTC are not yet — see `docs/adr/` for what is deliberately out
-of scope rather than merely unbuilt.
+0.1. Ranges, lists, `*`, `L` and step syntax are supported. Named months and weekdays and
+timezones other than UTC are not yet — see `docs/adr/` for what is deliberately out of
+scope rather than merely unbuilt.
