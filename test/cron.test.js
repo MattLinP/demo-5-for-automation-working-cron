@@ -111,10 +111,12 @@ test('step syntax parses in every one of the five fields', () => {
 });
 
 test('a step of zero names its field and points at it', () => {
+  // A step is a distance rather than a value, so the message does not quote the range of
+  // values the field allows: `*/90` is legal, and `(allowed 0-59)` would deny it.
   assert.throws(() => parse('*/0 * * * *'), {
     name: 'CronError',
     message: [
-      'minute: step of zero: */0 (allowed 0-59)',
+      'minute: step of zero: */0',
       '',
       '  */0 * * * *',
       '  ^^^',
@@ -479,6 +481,15 @@ test('a day field is restricted by being written out, not by what it covers', ()
   const schedule = parse('0 0 15 * 0,1,2,3,4,5,6');
   const next = nextRun(schedule, new Date('2026-03-01T00:00:00Z'));
   assert.equal(next.toISOString(), '2026-03-02T00:00:00.000Z');
+});
+
+test('a stepped day field is written out as well, so it restricts too', () => {
+  // `*/1` allows every day of the month, but it is not `*` — the same rule as the list
+  // above — so the two day fields are ORed and Monday stops narrowing anything. The 2nd
+  // of March 2026 is a Monday; the run after it is the very next day.
+  const schedule = parse('0 0 */1 * 1');
+  const next = nextRun(schedule, new Date('2026-03-02T00:01:00Z'));
+  assert.equal(next.toISOString(), '2026-03-03T00:00:00.000Z');
 });
 
 test('L in the day of month expands to the last-day marker', () => {

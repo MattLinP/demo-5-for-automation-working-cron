@@ -56,8 +56,9 @@ export class CronError extends Error {
 
 // The mistakes common enough to be worth guessing at, and what to say about each.
 //
-// The two about syntax say "not supported in this version" rather than "not supported":
-// they stay true when that syntax lands, and only stop being reachable.
+// `names` says "not supported in this version" rather than "not supported": it stays
+// true when that syntax lands, and only stops being reachable. `fieldCount` and
+// `sundayIsZero` describe decisions rather than gaps, so neither is waiting on anything.
 const SUGGESTIONS = {
   names: 'named months and weekdays are not supported in this version; use the number',
   fieldCount:
@@ -108,8 +109,18 @@ function excerpt(expression, offset, length) {
 // `name` is absent when `expandField` is called directly rather than through `parse`:
 // there is no field being read, so there is nothing to name.
 function fieldError(message, min, max, name) {
-  const field = name === undefined ? '' : `${name}: `;
-  return new CronError(`${field}${message} (allowed ${min}-${max})`);
+  return new CronError(`${namedFor(message, name)} (allowed ${min}-${max})`);
+}
+
+// A field error about a step rather than about a value. A step is a distance and not a
+// value the field takes, so the field's range has nothing to say about it and is left
+// off: `*/90` in the minute field is legal, and `(allowed 0-59)` would suggest otherwise.
+function stepError(message, name) {
+  return new CronError(namedFor(message, name));
+}
+
+function namedFor(message, name) {
+  return name === undefined ? message : `${name}: ${message}`;
 }
 
 // One field into the sorted set of values it allows.
@@ -147,7 +158,7 @@ export function expandField(text, min, max, name, allowsLast = false) {
     const slash = part.indexOf('/');
     const stepped = slash !== -1;
     const over = stepped ? part.slice(0, slash) : part;
-    const step = stepped ? toStep(part.slice(slash + 1), part, min, max, name) : 1;
+    const step = stepped ? toStep(part.slice(slash + 1), part, name) : 1;
 
     const dash = over.indexOf('-');
     let lo;
@@ -160,7 +171,7 @@ export function expandField(text, min, max, name, allowsLast = false) {
     } else if (dash === -1) {
       // A single value is a range of one, and a range of one is nothing for a step to
       // count over: `5/15` is a mistake rather than a roundabout way of writing `5`.
-      if (stepped) throw fieldError(`step needs * or a range: ${part}`, min, max, name);
+      if (stepped) throw stepError(`step needs * or a range: ${part}`, name);
       lo = toNumber(over, min, max, name);
       hi = lo;
     } else {
@@ -191,10 +202,10 @@ function ascending(a, b) {
 //
 // Errors quote the whole list item rather than the step alone: `*/n` is what was written,
 // and `not a number: n` on its own leaves the reader looking for an `n` in the field.
-function toStep(text, part, min, max, name) {
-  if (!/^[0-9]+$/.test(text)) throw fieldError(`not a number: ${part}`, min, max, name);
+function toStep(text, part, name) {
+  if (!/^[0-9]+$/.test(text)) throw stepError(`not a number: ${part}`, name);
   const step = Number(text);
-  if (step === 0) throw fieldError(`step of zero: ${part}`, min, max, name);
+  if (step === 0) throw stepError(`step of zero: ${part}`, name);
   return step;
 }
 
