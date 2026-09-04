@@ -332,6 +332,38 @@ test('a name the field does not know is refused', () => {
   });
 });
 
+test('a name in the wrong naming field is told which field it belongs to', () => {
+  // Both fields have names, so neither guess about *having* names fits: what went wrong
+  // is that this name belongs to the other one.
+  assert.throws(() => parse('0 0 1 MON *'), {
+    name: 'CronError',
+    message: [
+      'month: not a number: MON (allowed 1-12)',
+      '',
+      '  0 0 1 MON *',
+      '        ^^^',
+      'likely cause: months are JAN–DEC and weekdays SUN–SAT; that name belongs to the other field',
+    ].join('\n'),
+  });
+  assert.throws(() => parse('0 0 * * JAN'), (error) => {
+    assert.equal(
+      error.suggestion,
+      'months are JAN–DEC and weekdays SUN–SAT; that name belongs to the other field',
+    );
+    return true;
+  });
+});
+
+test('a word that is a name nowhere is not blamed on the other field', () => {
+  assert.throws(() => parse('0 0 1 MONDAY *'), (error) => {
+    assert.equal(
+      error.suggestion,
+      'month and weekday names are the first three letters, as in JAN and MON',
+    );
+    return true;
+  });
+});
+
 test('a named range written backwards is refused', () => {
   assert.throws(() => parse('0 0 * * FRI-MON'), CronError);
   assert.throws(() => parse('0 0 1 DEC-JAN *'), CronError);

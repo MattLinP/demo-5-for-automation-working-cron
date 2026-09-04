@@ -76,6 +76,7 @@ export class CronError extends Error {
 // none goes stale on its own.
 const SUGGESTIONS = {
   noNamesHere: 'only the month and day-of-week fields have names; use the number',
+  wrongNameField: 'months are JAN–DEC and weekdays SUN–SAT; that name belongs to the other field',
   unknownName: 'month and weekday names are the first three letters, as in JAN and MON',
   fieldCount:
     'this parser takes five fields; a leading seconds field is a Quartz expression — see docs/adr/0001-five-fields-only.md',
@@ -101,13 +102,20 @@ function suggestionFor({ fieldCount, text, name }) {
 
   // Month and weekday names are three letters, so a run of letters is someone reaching
   // for one. A run this field already reads is not the mistake — `MON/2` failed over its
-  // step, not its name — so only a run the field cannot read earns a guess, and which
-  // guess that is depends on whether the field has names at all. A lone letter is
-  // neither: `L` is real syntax here, in the day-of-month field, and `L` in the wrong
-  // field or at the end of a range is not a misspelled name.
-  const runs = text.match(/[A-Za-z]{2,}/g) ?? [];
-  if (runs.some((run) => spelledNumber(run, name) === undefined)) {
-    return namesFor(name) === undefined ? SUGGESTIONS.noNamesHere : SUGGESTIONS.unknownName;
+  // step, not its name — so only a run the field cannot read earns a guess. A lone letter
+  // is not a run: `L` is real syntax here, in the day-of-month field, and `L` in the
+  // wrong field or at the end of a range is not a misspelled name.
+  //
+  // Which guess an unreadable run earns is the difference between three mistakes: a name
+  // in a field that has none, a name in the naming field it does not belong to, and a
+  // word that is not a name anywhere.
+  const unreadable = (text.match(/[A-Za-z]{2,}/g) ?? []).filter(
+    (run) => spelledNumber(run, name) === undefined,
+  );
+  if (unreadable.length > 0) {
+    if (namesFor(name) === undefined) return SUGGESTIONS.noNamesHere;
+    if (unreadable.some(isNameAnywhere)) return SUGGESTIONS.wrongNameField;
+    return SUGGESTIONS.unknownName;
   }
   // Sunday as 7 rather than 0 — a convention borrowed from another dialect rather than a
   // value picked at random, which is why only the bare 7 is read this way.
@@ -264,6 +272,13 @@ function spelledNumber(text, name) {
 // called directly and there is no field whose names these would be.
 function namesFor(name) {
   return Object.hasOwn(NAMES, name) ? NAMES[name] : undefined;
+}
+
+// Whether any field would read this text as a name, whichever field was asked. Used only
+// to tell "not a name here" from "not a name at all", so that `MON` in the month field is
+// answered as the mix-up it is rather than as an unrecognised word.
+function isNameAnywhere(text) {
+  return Object.keys(NAMES).some((field) => spelledNumber(text, field) !== undefined);
 }
 
 // Where each field starts, counted in the expression as it was passed rather than
