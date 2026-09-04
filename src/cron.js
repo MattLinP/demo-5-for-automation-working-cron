@@ -122,49 +122,62 @@ function toNumber(text, min, max, name) {
   return value;
 }
 
-// Where each field starts, counted in the expression as it was passed rather than
-// re-derived by joining the split fields, so that runs of whitespace between fields do
-// not shift the offsets.
-function fieldOffsets(expression) {
-  return [...expression.matchAll(/\S+/g)].map((match) => match.index);
-}
-
 // A field error re-raised with the place in the expression it came from. Anything that
 // is not a CronError is left alone.
 function pointingAt(error, location) {
   return error instanceof CronError ? new CronError(error.message, location) : error;
 }
 
+// An expression into its five fields, each with its text and `at`, the offset it starts
+// at in the expression as it was passed. Nothing here interprets a field: what a minute
+// is, and whether `32` is one, is `expandField`'s question.
+//
+// Offsets are read off the string itself rather than re-derived from the field texts, so
+// runs of whitespace between fields, a leading indent and tabs all leave the remaining
+// fields where they actually are. That is the whole reason a field is a token and not a
+// string.
+export function tokenize(expression) {
+  const tokens = [...expression.matchAll(/\S+/g)].map((match) => ({
+    text: match[0],
+    at: match.index,
+  }));
+
+  // An expression with no fields in it at all — empty, or nothing but whitespace — is
+  // one empty field rather than none, which is the count it has always been refused
+  // with. There is no text to point at, so it starts where the expression does.
+  if (tokens.length === 0) tokens.push({ text: '', at: 0 });
+
+  if (tokens.length !== 5) throw new CronError(`expected 5 fields, got ${tokens.length}`);
+  return tokens;
+}
+
 // A cron expression into the five value sets it allows.
 export function parse(expression) {
   if (typeof expression !== 'string') throw new CronError('expression must be a string');
 
-  const parts = expression.trim().split(/\s+/);
-  if (parts.length !== 5) throw new CronError(`expected 5 fields, got ${parts.length}`);
+  const tokens = tokenize(expression);
 
   const schedule = {};
   for (let i = 0; i < FIELDS.length; i++) {
     const field = FIELDS[i];
+    const token = tokens[i];
     try {
       schedule[field.name] = expandField(
-        parts[i],
+        token.text,
         field.min,
         field.max,
         field.name,
         field.allowsLast,
       );
     } catch (error) {
-      // Offsets are wanted only to point at a failure, so they are found here rather
-      // than on every parse.
-      const offset = fieldOffsets(expression)[i];
-      throw pointingAt(error, { expression, offset, length: parts[i].length });
+      throw pointingAt(error, { expression, offset: token.at, length: token.text.length });
     }
   }
   // Which of the two day fields were restricted, which the expanded sets cannot say:
   // a field written out in full covers the same values as `*` but is still restricted,
   // and the difference decides how the two fields combine. See `matchesDay`.
-  schedule.dayOfMonthRestricted = parts[2] !== '*';
-  schedule.dayOfWeekRestricted = parts[4] !== '*';
+  schedule.dayOfMonthRestricted = tokens[2].text !== '*';
+  schedule.dayOfWeekRestricted = tokens[4].text !== '*';
   schedule.source = expression;
   return schedule;
 }

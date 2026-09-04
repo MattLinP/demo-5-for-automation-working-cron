@@ -8,6 +8,7 @@ import {
   nextRun,
   nextRuns,
   parse,
+  tokenize,
 } from '../src/cron.js';
 
 test('a star expands to the whole range', () => {
@@ -56,6 +57,53 @@ test('a value outside the field is refused', () => {
 
 test('a field that is not a number is refused', () => {
   assert.throws(() => expandField('mon', 0, 59), CronError);
+});
+
+test('tokenize gives each field its text and where it starts', () => {
+  assert.deepEqual(tokenize('0  9 32 * *'), [
+    { text: '0', at: 0 },
+    { text: '9', at: 3 },
+    { text: '32', at: 5 },
+    { text: '*', at: 8 },
+    { text: '*', at: 10 },
+  ]);
+});
+
+test('tokenize offsets are into the string as it was passed', () => {
+  assert.deepEqual(tokenize('  0 9 * * *  ').map((token) => token.at), [2, 4, 6, 8, 10]);
+  assert.deepEqual(tokenize('0\t9\t32 * *').map((token) => token.at), [0, 2, 4, 7, 9]);
+});
+
+test('tokenize does no interpretation', () => {
+  assert.deepEqual(tokenize('99 mon L -1 */5'), [
+    { text: '99', at: 0 },
+    { text: 'mon', at: 3 },
+    { text: 'L', at: 7 },
+    { text: '-1', at: 9 },
+    { text: '*/5', at: 12 },
+  ]);
+});
+
+test('tokenize needs exactly five fields', () => {
+  assert.throws(() => tokenize('0 9 * *'), {
+    name: 'CronError',
+    message: 'expected 5 fields, got 4',
+  });
+  assert.throws(() => tokenize('0 9 * * * *'), {
+    name: 'CronError',
+    message: 'expected 5 fields, got 6',
+  });
+});
+
+test('tokenize counts an expression with no fields in it as one empty field', () => {
+  assert.throws(() => tokenize(''), {
+    name: 'CronError',
+    message: 'expected 5 fields, got 1',
+  });
+  assert.throws(() => tokenize('   '), {
+    name: 'CronError',
+    message: 'expected 5 fields, got 1',
+  });
 });
 
 test('an expression needs exactly five fields', () => {
