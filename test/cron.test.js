@@ -93,38 +93,108 @@ test('named weekdays are not supported yet', () => {
   assert.throws(() => parse('0 0 * * MON'), CronError);
 });
 
-test('an out of range value names its field and states the range', () => {
+test('an out of range value names its field and points at it', () => {
   assert.throws(() => parse('0 9 32 * *'), {
     name: 'CronError',
-    message: 'dayOfMonth: out of range: 32 (allowed 1-31)',
+    message: [
+      'dayOfMonth: out of range: 32 (allowed 1-31)',
+      '',
+      '  0 9 32 * *',
+      '      ^^',
+    ].join('\n'),
   });
 });
 
 test('a minute error names the minute field', () => {
   assert.throws(() => parse('60 * * * *'), {
     name: 'CronError',
-    message: 'minute: out of range: 60 (allowed 0-59)',
+    message: [
+      'minute: out of range: 60 (allowed 0-59)',
+      '',
+      '  60 * * * *',
+      '  ^^',
+    ].join('\n'),
   });
 });
 
 test('an hour error names the hour field', () => {
   assert.throws(() => parse('* 9-2 * * *'), {
     name: 'CronError',
-    message: 'hour: range out of order: 9-2 (allowed 0-23)',
+    message: [
+      'hour: range out of order: 9-2 (allowed 0-23)',
+      '',
+      '  * 9-2 * * *',
+      '    ^^^',
+    ].join('\n'),
   });
 });
 
 test('a month error names the month field', () => {
   assert.throws(() => parse('* * * JAN *'), {
     name: 'CronError',
-    message: 'month: not a number: JAN (allowed 1-12)',
+    message: [
+      'month: not a number: JAN (allowed 1-12)',
+      '',
+      '  * * * JAN *',
+      '        ^^^',
+    ].join('\n'),
   });
 });
 
 test('a day of week error names the day of week field', () => {
   assert.throws(() => parse('* * * * 1,'), {
     name: 'CronError',
-    message: 'dayOfWeek: empty list item (allowed 0-6)',
+    message: [
+      'dayOfWeek: empty list item (allowed 0-6)',
+      '',
+      '  * * * * 1,',
+      '          ^^',
+    ].join('\n'),
+  });
+});
+
+test('the caret follows the expression own spacing', () => {
+  assert.throws(() => parse('0  9  32 * *'), {
+    name: 'CronError',
+    message: [
+      'dayOfMonth: out of range: 32 (allowed 1-31)',
+      '',
+      '  0  9  32 * *',
+      '        ^^',
+    ].join('\n'),
+  });
+});
+
+test('the expression is shown exactly as it was passed', () => {
+  assert.throws(() => parse('  0 9 32 * *  '), {
+    name: 'CronError',
+    message: [
+      'dayOfMonth: out of range: 32 (allowed 1-31)',
+      '',
+      '    0 9 32 * *  ',
+      '        ^^',
+    ].join('\n'),
+  });
+});
+
+test('a tab between fields moves both lines by the same amount', () => {
+  assert.throws(() => parse('0\t9\t32 * *'), {
+    name: 'CronError',
+    message: [
+      'dayOfMonth: out of range: 32 (allowed 1-31)',
+      '',
+      '  0\t9\t32 * *',
+      '   \t \t^^',
+    ].join('\n'),
+  });
+});
+
+test('the expression and the offending field are properties of the error', () => {
+  assert.throws(() => parse('0  9  32 * *'), (error) => {
+    assert.equal(error.expression, '0  9  32 * *');
+    assert.equal(error.offset, 6);
+    assert.equal(error.length, 2);
+    return true;
   });
 });
 
@@ -135,7 +205,15 @@ test('expandField called without a field name still states the range', () => {
   });
 });
 
-test('errors raised before any field is read are unchanged', () => {
+test('CronError still takes the options bag Error takes', () => {
+  const root = new Error('why');
+  const error = new CronError('boom', { cause: root });
+  assert.equal(error.message, 'boom');
+  assert.equal(error.cause, root);
+  assert.equal(error.expression, undefined);
+});
+
+test('errors with no field to point at are unchanged', () => {
   assert.throws(() => parse('0 9 * *'), {
     name: 'CronError',
     message: 'expected 5 fields, got 4',
@@ -143,5 +221,9 @@ test('errors raised before any field is read are unchanged', () => {
   assert.throws(() => parse(null), {
     name: 'CronError',
     message: 'expression must be a string',
+  });
+  assert.throws(() => parse(''), {
+    name: 'CronError',
+    message: 'expected 5 fields, got 1',
   });
 });
