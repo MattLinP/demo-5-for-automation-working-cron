@@ -15,10 +15,16 @@
 const FIELDS = [
   { name: 'minute', min: 0, max: 59 },
   { name: 'hour', min: 0, max: 23 },
-  { name: 'dayOfMonth', min: 1, max: 31 },
+  { name: 'dayOfMonth', min: 1, max: 31, allowsLast: true },
   { name: 'month', min: 1, max: 12 },
   { name: 'dayOfWeek', min: 0, max: 6 },
 ];
+
+// `L`, the last day of the month, as it stands in an expanded day-of-month field. It is
+// the one piece of syntax whose value is not known at parse time — 28, 29, 30 or 31
+// depending on the month being tested — so it travels through the expansion as itself
+// and is resolved against a date by `dayOfMonthMatches`.
+export const LAST_DAY_OF_MONTH = 'L';
 
 export class CronError extends Error {
   // When the error is about one field, `options` says which: `expression` is the
@@ -66,7 +72,11 @@ function fieldError(message, min, max, name) {
 // Understands `*`, a single number, an inclusive range `a-b`, and a comma-separated
 // list of any of those. `name` is the field's name, used to say where an error came
 // from.
-export function expandField(text, min, max, name) {
+//
+// When `allowsLast` is set — only the day-of-month field sets it — a list item may also
+// be `L`, which expands to `LAST_DAY_OF_MONTH` rather than to a number. It is a value in
+// its own right and not a number, so it cannot be an end of a range.
+export function expandField(text, min, max, name, allowsLast = false) {
   if (text === '*') {
     const all = [];
     for (let v = min; v <= max; v++) all.push(v);
@@ -76,6 +86,11 @@ export function expandField(text, min, max, name) {
   const values = new Set();
   for (const part of text.split(',')) {
     if (part === '') throw fieldError('empty list item', min, max, name);
+
+    if (allowsLast && part === LAST_DAY_OF_MONTH) {
+      values.add(LAST_DAY_OF_MONTH);
+      continue;
+    }
 
     const dash = part.indexOf('-');
     if (dash === -1) {
@@ -89,7 +104,15 @@ export function expandField(text, min, max, name) {
     for (let v = lo; v < hi; v++) values.add(v);
   }
 
-  return [...values].sort((a, b) => a - b);
+  return [...values].sort(ascending);
+}
+
+// Ascending order, with `L` after every number: whatever month it lands in, the last day
+// is the latest day the field allows.
+function ascending(a, b) {
+  if (a === LAST_DAY_OF_MONTH) return 1;
+  if (b === LAST_DAY_OF_MONTH) return -1;
+  return a - b;
 }
 
 function toNumber(text, min, max, name) {
@@ -123,7 +146,13 @@ export function parse(expression) {
   for (let i = 0; i < FIELDS.length; i++) {
     const field = FIELDS[i];
     try {
-      schedule[field.name] = expandField(parts[i], field.min, field.max, field.name);
+      schedule[field.name] = expandField(
+        parts[i],
+        field.min,
+        field.max,
+        field.name,
+        field.allowsLast,
+      );
     } catch (error) {
       // Offsets are wanted only to point at a failure, so they are found here rather
       // than on every parse.
@@ -146,13 +175,29 @@ export function parse(expression) {
 // one is restricted the other allows every value, so ANDing lets the restricted one
 // decide on its own.
 function matchesDay(schedule, date) {
-  const byDayOfMonth = schedule.dayOfMonth.includes(date.getUTCDate());
+  const byDayOfMonth = dayOfMonthMatches(schedule.dayOfMonth, date);
   const byDayOfWeek = schedule.dayOfWeek.includes(date.getUTCDay());
 
   if (schedule.dayOfMonthRestricted && schedule.dayOfWeekRestricted) {
     return byDayOfMonth || byDayOfWeek;
   }
   return byDayOfMonth && byDayOfWeek;
+}
+
+// Whether an expanded day-of-month field allows a date. Every value in it is a plain
+// number except `LAST_DAY_OF_MONTH`, whose day depends on the month being tested, so the
+// field is asked whether it allows the date rather than searched for the date's number.
+function dayOfMonthMatches(dayOfMonth, date) {
+  const day = date.getUTCDate();
+  return dayOfMonth.some((allowed) =>
+    allowed === LAST_DAY_OF_MONTH ? day === lastDayOfMonth(date) : allowed === day,
+  );
+}
+
+// The last day of the month `date` falls in. Day 0 of the following month is the day
+// before its first, which is this month's last, leap years included.
+function lastDayOfMonth(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
 }
 
 // The first minute at or after `from` that the schedule allows.
