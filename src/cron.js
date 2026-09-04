@@ -131,15 +131,28 @@ export function parse(expression) {
       throw pointingAt(error, { expression, offset, length: parts[i].length });
     }
   }
+  // Which of the two day fields were restricted, which the expanded sets cannot say:
+  // a field written out in full covers the same values as `*` but is still restricted,
+  // and the difference decides how the two fields combine. See `matchesDay`.
+  schedule.dayOfMonthRestricted = parts[2] !== '*';
+  schedule.dayOfWeekRestricted = parts[4] !== '*';
   schedule.source = expression;
   return schedule;
 }
 
+// Whether a date's day satisfies the schedule, by the rule in CONTEXT.md: when both day
+// fields are restricted the day matches if *either* does, so `0 0 1 * 1` fires on every
+// first and on every Monday rather than only on firsts that are Mondays. When at most
+// one is restricted the other allows every value, so ANDing lets the restricted one
+// decide on its own.
 function matchesDay(schedule, date) {
-  return (
-    schedule.dayOfMonth.includes(date.getUTCDate()) &&
-    schedule.dayOfWeek.includes(date.getUTCDay())
-  );
+  const byDayOfMonth = schedule.dayOfMonth.includes(date.getUTCDate());
+  const byDayOfWeek = schedule.dayOfWeek.includes(date.getUTCDay());
+
+  if (schedule.dayOfMonthRestricted && schedule.dayOfWeekRestricted) {
+    return byDayOfMonth || byDayOfWeek;
+  }
+  return byDayOfMonth && byDayOfWeek;
 }
 
 // The first minute at or after `from` that the schedule allows.
