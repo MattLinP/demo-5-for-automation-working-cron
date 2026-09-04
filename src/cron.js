@@ -21,10 +21,34 @@ const FIELDS = [
 ];
 
 export class CronError extends Error {
-  constructor(message) {
-    super(message);
+  // When the error is about one field, `options` says which: `expression` is the
+  // expression as it was passed, and `offset` and `length` locate the field within
+  // it. The message then gains a caret line under that field, and the three stay on
+  // the error so a caller can render them their own way instead. Errors with no field
+  // to point at are built without them and read as they always have. `options` is
+  // otherwise the standard one `Error` takes, so `cause` still reaches it.
+  constructor(message, options) {
+    const { expression, offset, length } = options ?? {};
+    const located = typeof expression === 'string';
+    super(located ? `${message}\n\n${excerpt(expression, offset, length)}` : message, options);
     this.name = 'CronError';
+    if (located) {
+      this.expression = expression;
+      this.offset = offset;
+      this.length = length;
+    }
   }
+}
+
+// The two lines a compiler prints under a message: the expression itself, and carets
+// under the field that failed.
+function excerpt(expression, offset, length) {
+  const indent = '  ';
+  // The text before the field becomes the caret line's padding with everything but
+  // its whitespace blanked out, so a tab between fields advances both lines equally
+  // instead of one space standing in for a tab stop.
+  const pad = expression.slice(0, offset).replace(/\S/g, ' ');
+  return `${indent}${expression}\n${indent}${pad}${'^'.repeat(length)}`;
 }
 
 // A CronError from inside a field's expansion, named for the field it came from and
@@ -75,6 +99,19 @@ function toNumber(text, min, max, name) {
   return value;
 }
 
+// Where each field starts, counted in the expression as it was passed rather than
+// re-derived by joining the split fields, so that runs of whitespace between fields do
+// not shift the offsets.
+function fieldOffsets(expression) {
+  return [...expression.matchAll(/\S+/g)].map((match) => match.index);
+}
+
+// A field error re-raised with the place in the expression it came from. Anything that
+// is not a CronError is left alone.
+function pointingAt(error, location) {
+  return error instanceof CronError ? new CronError(error.message, location) : error;
+}
+
 // A cron expression into the five value sets it allows.
 export function parse(expression) {
   if (typeof expression !== 'string') throw new CronError('expression must be a string');
@@ -85,7 +122,14 @@ export function parse(expression) {
   const schedule = {};
   for (let i = 0; i < FIELDS.length; i++) {
     const field = FIELDS[i];
-    schedule[field.name] = expandField(parts[i], field.min, field.max, field.name);
+    try {
+      schedule[field.name] = expandField(parts[i], field.min, field.max, field.name);
+    } catch (error) {
+      // Offsets are wanted only to point at a failure, so they are found here rather
+      // than on every parse.
+      const offset = fieldOffsets(expression)[i];
+      throw pointingAt(error, { expression, offset, length: parts[i].length });
+    }
   }
   schedule.source = expression;
   return schedule;
